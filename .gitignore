@@ -1,0 +1,44 @@
+# ESP-IDF build output
+build/
+/build-*/
+sdkconfig.old
+
+# ESP-IDF component manager cache/output
+managed_components/
+.component_hash
+
+# Retrieval checkout; reproducible Codec2 sources are in vendor/ and generated/
+/components/codec2/upstream/
+
+# Python/test/cache files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Editor and OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+Thumbs.db
+Desktop.ini
+.DS_Store
+~$*
+*.jrl
+
+# Logs and generated binaries
+*.log
+*.elf
+*.bin
+*.map
+*.exe
+*.dll
+*.o
+*.obj
+*.a
+tools/hw-logs-*/
+tools/spectrum-*/
+tools/captures/*.wav
+
+
+.magic-lamp-cache/
