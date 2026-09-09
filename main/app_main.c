@@ -303,6 +303,8 @@ static void apply_control_event(modem_t *modem, const ui_event_t *event)
             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), (unsigned long)rx_debug.fec_reacquires,
             (unsigned long long)transport_usb_dropped_bytes());
+        ESP_LOGI(TAG, "stack free: audio=%u codec2=%u bytes",
+                 (unsigned)uxTaskGetStackHighWaterMark(NULL), content_codec_stack_free());
         return;
     }
     case UI_EVENT_RX_FEC_BRANCH:
@@ -665,6 +667,10 @@ void app_main(void)
     s_spectrum_queue = xQueueCreate(1, sizeof(spectrum_msg_t));
     s_tx_queue = xQueueCreate(1, sizeof(tx_cmd_t));
     ESP_ERROR_CHECK(content_service_init());
+    ESP_LOGI(TAG, "after Codec2: internal free=%u largest=%u PSRAM=%u bytes",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     ESP_ERROR_CHECK(s_decoded_queue && s_control_queue && s_spectrum_queue && s_tx_queue ?
                     ESP_OK : ESP_ERR_NO_MEM);
 
@@ -676,9 +682,8 @@ void app_main(void)
     ESP_ERROR_CHECK(task_ok == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
 
     ESP_ERROR_CHECK(rx_web_start(web_configure_receiver));
-    ESP_LOGI(TAG, "ESP32-P4 PSK modem started");
+    ESP_LOGI(TAG, "ESP32-P4 PSK modem started; main stack free=%u bytes",
+             (unsigned)uxTaskGetStackHighWaterMark(NULL));
 
-    while (true) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
+    /* All work belongs to the application tasks; release the main stack. */
 }

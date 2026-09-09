@@ -18,6 +18,8 @@ typedef struct { voice_packet_t packet; size_t offset; uint32_t epoch; } voice_t
 
 const char *content_name(content_type_t type);
 esp_err_t content_service_init(void);
+/* Diagnostic only: ESP-IDF stack high-water mark in bytes. */
+unsigned content_codec_stack_free(void);
 /* Control and microphone capture belong to audio_task; codec_task owns Codec2. */
 void content_begin(content_type_t type, bool transmit, bool active, uint32_t rate, uint32_t epoch);
 void content_capture(const int16_t *pcm48k, size_t count);

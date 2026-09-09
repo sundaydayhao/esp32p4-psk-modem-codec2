@@ -6,10 +6,12 @@
 #include "audio_input.h"
 #include "transport.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"
 
 typedef struct { voice_packet_t packet; uint32_t epoch; } packet_item_t;
 typedef struct { int16_t pcm[VOICE_FRAME_SAMPLES]; uint32_t epoch; bool end, valid; } pcm_item_t;
@@ -17,6 +19,7 @@ typedef struct { voice_record_t record; uint32_t epoch; } record_item_t;
 typedef struct { content_type_t type; bool transmit, active; uint32_t epoch; } session_t;
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 static QueueHandle_t s_packets, s_input, s_records, s_output;
+static TaskHandle_t s_codec_task;
 static session_t s_session;
 static content_status_t s_status;
 static bool s_encoder_ended;
@@ -200,8 +203,27 @@ static void enqueue_record(voice_record_t *r, uint32_t epoch)
 }
 static void codec_task(void *arg)
 {
-    struct CODEC2 *codec = arg;
-    uint32_t epoch = UINT32_MAX;
+    QueueHandle_t startup = arg;
+    /* make_analysis_window() alone has 8 KiB of FFT scratch. All Codec2
+     * creation, including startup, must run on this task's 24 KiB stack. */
+    struct CODEC2 *codec = codec2_create(CODEC2_MODE_700C);
+    esp_err_t result = codec ? ESP_OK : ESP_ERR_NO_MEM;
+    if (codec && (codec2_samples_per_frame(codec) != VOICE_FRAME_SAMPLES ||
+                  codec2_bits_per_frame(codec) != VOICE_FRAME_BITS)) {
+        result = ESP_ERR_INVALID_SIZE;
+    }
+    if (result != ESP_OK) {
+        if (codec) codec2_destroy(codec);
+        xQueueSend(startup, &result, portMAX_DELAY);
+        /* Let the caller delete this WithCaps task; self-deletion would need
+         * another temporary task allocation on an allocation-failure path. */
+        for (;;) vTaskSuspend(NULL);
+    }
+    uint32_t epoch = session_get().epoch;
+    portENTER_CRITICAL(&s_lock); s_status.codec_ready = true; portEXIT_CRITICAL(&s_lock);
+    ESP_LOGI("voice", "Codec2 700C ready: 8 kHz, 320 samples / 28 bits; stack free=%u bytes",
+             (unsigned)uxTaskGetStackHighWaterMark(NULL));
+    xQueueSend(startup, &result, portMAX_DELAY);
     voice_record_t pending = {0};
     voice_playout_t playout;
     voice_playout_reset(&playout);
@@ -299,16 +321,30 @@ esp_err_t content_service_init(void)
     s_input = xQueueCreate(8, sizeof(pcm_item_t));
     s_records = xQueueCreate(8, sizeof(record_item_t));
     s_output = xQueueCreate(4, sizeof(pcm_item_t));
-    if (!s_packets || !s_input || !s_records || !s_output) return ESP_ERR_NO_MEM;
-    struct CODEC2 *codec = codec2_create(CODEC2_MODE_700C);
-    if (!codec) return ESP_ERR_NO_MEM;
-    if (codec2_samples_per_frame(codec) != VOICE_FRAME_SAMPLES || codec2_bits_per_frame(codec) != VOICE_FRAME_BITS) {
-        codec2_destroy(codec); return ESP_ERR_INVALID_SIZE;
+    QueueHandle_t startup = xQueueCreate(1, sizeof(esp_err_t));
+    esp_err_t result = ESP_ERR_NO_MEM;
+    if (s_packets && s_input && s_records && s_output && startup &&
+        /* CPU-only worker: no DMA or Flash/NVS calls. Its large FFT stack can
+         * use PSRAM; the IDF allocator keeps the TCB in internal RAM. */
+        xTaskCreatePinnedToCoreWithCaps(codec_task, "codec2", 24576, startup, 6,
+                                       &s_codec_task, 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) == pdPASS) {
+        /* Wait for the worker to validate the codec before other tasks use it. */
+        xQueueReceive(startup, &result, portMAX_DELAY);
     }
-    s_status.codec_ready = true;
-    if (xTaskCreatePinnedToCore(codec_task, "codec2", 24576, codec, 6, NULL, 1) != pdPASS) {
-        codec2_destroy(codec); return ESP_ERR_NO_MEM;
+    if (startup) vQueueDelete(startup);
+    if (result != ESP_OK) {
+        if (s_codec_task) vTaskDeleteWithCaps(s_codec_task);
+        s_codec_task = NULL;
+        if (s_packets) vQueueDelete(s_packets);
+        if (s_input) vQueueDelete(s_input);
+        if (s_records) vQueueDelete(s_records);
+        if (s_output) vQueueDelete(s_output);
+        s_packets = s_input = s_records = s_output = NULL;
     }
-    ESP_LOGI("voice", "Codec2 700C ready: 8 kHz, 320 samples / 28 bits; no UART module");
-    return ESP_OK;
+    return result;
+}
+
+unsigned content_codec_stack_free(void)
+{
+    return s_codec_task ? (unsigned)uxTaskGetStackHighWaterMark(s_codec_task) : 0;
 }

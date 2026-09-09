@@ -13,6 +13,21 @@ does not build FreeDV modems or host command-line programs. The public API is
 per frame. No downloaded binary library, runtime download, or external speech
 module is required to build or run.
 
+On ESP32-P4, `include/codec2_esp_alloc.h` is force-included **only for this
+component**. It directs Codec2/Kiss FFT CPU buffers to PSRAM, including small
+allocations that the global allocator would otherwise place in internal RAM.
+The normal ESP-IDF `free()` releases these buffers. The CPU-only Codec2 task's
+24 KiB stack also uses PSRAM through the IDF capability-aware task API; its TCB,
+other task stacks and DMA buffers stay in internal RAM. The Codec2 task must not
+perform Flash/NVS operations. Host builds use the normal C allocator.
+No upstream files or shared SDK files are patched.
+
+The initial `codec2_create()` runs inside the 24 KiB Codec2 task, just like later
+session resets. Its analysis-window initialization alone uses two 512-element
+complex arrays (8 KiB), which cannot fit on the application's 8 KiB main stack.
+`content_service_init()` waits for the worker's initialization result before
+starting the remaining application tasks.
+
 `generated/` contains codebooks produced by the unmodified upstream
 `generate_codebook.c`. They are checked in for reproducible offline cross builds.
 Regenerate them with `python tools/prepare_codec2.py` from the project root

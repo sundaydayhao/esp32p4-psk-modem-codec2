@@ -40,6 +40,17 @@ powershell -ExecutionPolicy Bypass -File tools/preview_lcd.ps1
 
 构建输出位于 `build-codec2/psk_modem_p4.bin`。构建脚本使用当前工程目录，不再跳转到原来的 `esp32p4-psk-modem`；旧 `build` 下的历史固件不代表本版本。
 
-已通过 P4 固件编译、PSKR 完整载荷、两种单载波连续语音包、协议损坏/丢包/尾帧、图片及 RsID 的主机测试，并验证了 LVGL 模式选择和 PTT 事件。尚未烧录或完成新链路的双板、fldigi、真实电台及并发长时间验收。有限理想信道样本无错不能代表实际短波表现。
+烧录脚本同样默认使用 `build-codec2`，如需其他构建目录可传入 `-BuildDir`：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/flash_board.ps1 -Port COM21
+python tools/check_board_stability.py --port COM21 --seconds 300 --exercise-voice
+```
+
+`COM21` 仅是本次实测端口。稳定性检查会短暂发射线路音频，然后恢复 RX。
+
+已通过 P4 固件编译、PSKR 完整载荷、两种单载波连续语音包、协议损坏/丢包/尾帧、图片及 RsID 的主机测试，并验证了 LVGL 模式选择和 PTT 事件。2026-09-09 上板排查修复了 Codec2 首次初始化的 main 栈溢出，以及片内 RAM 不足导致的任务创建失败；Codec2 初始化、工作缓冲及任务栈已按 P4 内存条件调整。新链路的双板、fldigi、真实电台及并发长时间验收仍未完成。有限理想信道样本无错不能代表实际短波表现。
 
 完整格式、实现边界、接线要求、测试结果与下一阶段安排见 [Codec2 迁移说明](docs/CODEC2_MIGRATION_2026-09-09.md)。依赖源码固定版本及码本再生成方法见 [Codec2 组件](components/codec2/README.md)。较早日期的文档与录音仅保留为原工程历史记录。
+
+重启修复已烧录至 ESP32-P4 rev3.2，完成 300 秒单板运行及内容/模式切换回归，未再次重启或触发看门狗；两种语音模式编码正常且队列丢弃为 0。完整测量及尚未验证的部分见迁移说明的“实机重启排查”。

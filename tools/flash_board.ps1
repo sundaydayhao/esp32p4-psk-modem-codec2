@@ -1,10 +1,12 @@
 param(
     [Parameter(Mandatory = $true)][string]$Port,
-    [ValidateSet('P4', 'C6')][string]$Chip = 'P4'
+    [ValidateSet('P4', 'C6')][string]$Chip = 'P4',
+    [string]$BuildDir = ''
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$buildDir = if ($Chip -eq 'C6') { Join-Path $root 'build/c6' } else { Join-Path $root 'build' }
+if (!$BuildDir) { $BuildDir = if ($Chip -eq 'C6') { 'build/c6' } else { 'build-codec2' } }
+$buildDir = if ([IO.Path]::IsPathRooted($BuildDir)) { $BuildDir } else { Join-Path $root $BuildDir }
 $targetChip = if ($Chip -eq 'C6') { 'esp32c6' } else { 'esp32p4' }
 if (!(Test-Path "$buildDir/flash_args")) { throw "Build $Chip firmware first." }
 if ($Port -notin [System.IO.Ports.SerialPort]::GetPortNames()) { throw "Port $Port is not connected." }

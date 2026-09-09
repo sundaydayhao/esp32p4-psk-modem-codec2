@@ -101,7 +101,48 @@ powershell -ExecutionPolicy Bypass -File tools/preview_lcd.ps1
 - 实际 LVGL 页面主机渲染、29 个模式选择、两个语音模式筛选和 PTT 按下/释放事件通过；网页 JavaScript 语法检查通过。
 - ESP-IDF 5.5.5 / ESP32-P4 完整编译通过。构建日志与测试结果保存在 `build/*-checks*.log`、`build/codec2-build-final.log` 等文件中。
 
-尚未进行新固件烧录、麦克风到扬声器的双板实测、fldigi 双向真实音频互通、短波衰落/多径验证，以及 LCD/网络/存储同时运行的长时间测试。因此这里是已实现并通过主机回归的第一阶段，不是已完成商业验收的 FreeDV 产品。
+后续启动/内存问题及实机结果见下节。麦克风到扬声器的双板实测、fldigi 双向真实音频互通、短波衰落/多径验证，以及 LCD/网络/存储同时运行的长时间验收仍未完成；不能将主机回归或单板启动测试视作商业验收。
+
+## 实机重启排查
+
+2026-09-09 重启排查：在 COM21 识别到 ESP32-P4 rev3.2（USB Serial/JTAG
+`E8:F6:0A:E7:72:4B`）、32 MiB PSRAM。原固件 `97743de` 的 ELF SHA-256
+以 `2c60f706e` 开头，和本地 `build/psk_modem_p4.elf` 匹配。日志中的
+`Stack protection fault` 发生在 `main`；`0x400339c6` 对应 Kiss FFT 的
+`kf_work()`，调用者为 `make_analysis_window()`。两个局部复数数组已占
+8 KiB，再加调用栈即超出 main 的 8192 字节配置。
+
+修复将首次创建移入现有 Codec2 任务，并以启动结果队列同步；未关闭栈保护或
+看门狗。首次验证通过初始化后，又发现 `psk_ui` 因 `ESP_ERR_NO_MEM` 创建失败。
+因此组件内 Codec2/Kiss FFT 的工作缓冲改用 PSRAM，避免小块 malloc 挤占
+片内 RAM。仅将不执行 DMA、Flash/NVS 操作的 Codec2 任务的 24 KiB 栈通过
+IDF WithCaps API 放入 PSRAM，TCB 和其他任务栈仍在片内；main 启动结束后返回，
+释放其栈。`RXDIAG` 增加音频/Codec2 栈余量。
+烧录脚本默认目录统一为 `build-codec2`，支持显式 `-BuildDir`。
+
+复现与回归日志保存在本地 `build/reboot-debug/`。真实串口回归工具为：
+
+```powershell
+python tools/check_board_stability.py --port COM21 --seconds 180 --exercise-voice
+```
+
+该工具会切换 Text/Image/Audio、两种语音模式，并短暂进行线路音频 TX，结束时
+恢复 RX。端口必须根据本次连接确认，不能将 COM21 当作所有电脑的默认端口。
+
+最终固件已经通过该端口烧录，esptool 校验写入成功；未全片擦除，也未烧录 C6。
+最终 ELF SHA-256 为 `b00f4046fb6219b2351d8ace2421cfbcf893d3331fafd3d4bd27c3ec5fdc9cb5`，
+与启动日志的 `b00f4046f` 前缀一致。`after-final.log` 和
+`stability-final-result.log` 记录了 300 秒实机回归：
+
+- 正常启动一次，无再次复位、panic、断言、任务创建失败或看门狗故障；I2S 读取错误计数为 0。
+- C6 的 AP/DHCP 启动，LCD/UI 任务运行，串口控制持续响应；测试未连接电脑 Wi-Fi 去验证网页客户端。
+- Text/Image/Audio、PSK125R/250R 和两种语音模式切换完成；8PSK1200F、8PSK1000F 的发送阶段诊断分别观测到 176、174 个已编码帧，队列丢弃为 0。
+- 两次停止都完成排空并返回 RX，没有最终版本的 5 秒排空超时；结束状态是 Text/BPSK31/RX。
+- 编码最大单次处理时间分别为 8750、8892 µs；Codec2 栈最小余量为 7288 字节。没有输入远端语音包，因此这些数值不包含实机语音解码压力测试。
+- 热点启动后的片内空闲 RAM 约 40.7 KiB，最大连续块 23552 字节；PSRAM 空闲值保持 29400448 字节。
+
+这证明本次启动重启问题已修复，并覆盖上述五分钟负载。日志仍有音频块 deadline 超时计数；
+本次没有据此宣称长时间通信、全部实时指标或空口音质已经验收。
 
 ## 下一阶段
 
